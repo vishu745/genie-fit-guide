@@ -134,81 +134,148 @@ const Chatbot = () => {
   };
 
   const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioChunksRef.current = [];
-      
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
+    // Use Web Speech API for real-time voice recognition
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      toast({
+        title: 'Not Supported',
+        description: 'Speech recognition is not supported in this browser. Please type your message.',
+        variant: 'destructive',
       });
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
       
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        stream.getTracks().forEach(track => track.stop());
-        
-        // Convert to base64 and transcribe
-        const reader = new FileReader();
-        reader.readAsDataURL(audioBlob);
-        reader.onloadend = async () => {
-          const base64Audio = reader.result?.toString().split(',')[1];
-          if (base64Audio) {
-            await transcribeAudio(base64Audio);
-          }
-        };
-      };
-
-      mediaRecorder.start();
       setIsRecording(true);
       
       toast({
-        title: 'Recording...',
-        description: 'Speak now. Recording will stop automatically.',
+        title: 'Listening...',
+        description: 'Speak now. Tap the microphone again to stop.',
       });
 
-      // Auto-stop after 30 seconds
-      setTimeout(() => {
-        if (mediaRecorderRef.current?.state === 'recording') {
-          stopRecording();
+      recognition.onresult = (event: any) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          } else {
+            interimTranscript += transcript;
+          }
         }
-      }, 30000);
+
+        setInput((prev) => {
+          if (finalTranscript) {
+            return prev + finalTranscript;
+          }
+          return prev;
+        });
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        setIsRecording(false);
+        toast({
+          title: 'Error',
+          description: 'Speech recognition failed. Please try again.',
+          variant: 'destructive',
+        });
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognition.start();
+      mediaRecorderRef.current = recognition as any;
+
     } catch (error) {
       console.error('Recording error:', error);
+      setIsRecording(false);
       toast({
         title: 'Error',
-        description: 'Could not access microphone',
+        description: 'Could not start speech recognition',
         variant: 'destructive',
       });
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
+    if (mediaRecorderRef.current) {
+      try {
+        // For Web Speech API
+        if (typeof mediaRecorderRef.current.stop === 'function') {
+          mediaRecorderRef.current.stop();
+        }
+      } catch (error) {
+        console.error('Error stopping recording:', error);
+      }
       setIsRecording(false);
+      
+      toast({
+        title: 'Stopped',
+        description: 'You can now send your message or continue speaking',
+      });
     }
   };
 
   const transcribeAudio = async (base64Audio: string) => {
-    // For now, use Web Speech API for transcription
-    // In production, you'd send this to a speech-to-text service
+    // Check if browser supports Web Speech API
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      toast({
+        title: 'Not Supported',
+        description: 'Speech recognition is not supported in this browser',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     toast({
       title: 'Processing...',
       description: 'Converting speech to text',
     });
-    
-    // Placeholder: In a real implementation, you'd call a transcription API
-    // For demo purposes, we'll use a simple message
-    setTimeout(() => {
-      setInput('Voice transcription will be available soon. Please type your message.');
-    }, 1000);
+
+    // Create a new audio element from the blob to trigger speech recognition
+    // For now, we'll use a simpler approach with live recognition
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+      toast({
+        title: 'Transcribed!',
+        description: 'You can now send your message',
+      });
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('Speech recognition error:', event.error);
+      toast({
+        title: 'Error',
+        description: 'Failed to transcribe audio. Please try again.',
+        variant: 'destructive',
+      });
+    };
+
+    // Note: This won't work with the recorded audio blob
+    // For proper implementation, we'd need a backend transcription service
+    toast({
+      title: 'Feature Note',
+      description: 'For best results, use the microphone button and speak directly',
+    });
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {

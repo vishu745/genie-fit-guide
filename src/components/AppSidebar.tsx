@@ -58,11 +58,11 @@ export function AppSidebar() {
                       className={({ isActive }) =>
                         isActive
                           ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                          : 'text-foreground hover:bg-muted hover:text-foreground'
+                          : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                       }
                     >
                       <item.icon className="w-4 h-4" />
-                      {!collapsed && <span>{item.title}</span>}
+                      {!collapsed && <span className="font-medium">{item.title}</span>}
                     </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
