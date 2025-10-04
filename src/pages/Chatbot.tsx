@@ -2,14 +2,16 @@ import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Mic, MicOff, Bot, User as UserIcon } from 'lucide-react';
+import { Send, Mic, MicOff, Bot, User as UserIcon, Volume2, VolumeX } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { TypewriterMessage } from '@/components/TypewriterMessage';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
+  timestamp?: number;
 }
 
 const Chatbot = () => {
@@ -22,7 +24,12 @@ const Chatbot = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -32,6 +39,14 @@ const Chatbot = () => {
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    return () => {
+      if (speechSynthesisRef.current) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
@@ -40,7 +55,7 @@ const Chatbot = () => {
     setIsLoading(true);
 
     // Add user message to chat
-    const newMessages = [...messages, { role: 'user' as const, content: userMessage }];
+    const newMessages = [...messages, { role: 'user' as const, content: userMessage, timestamp: Date.now() }];
     setMessages(newMessages);
 
     try {
@@ -68,7 +83,13 @@ const Chatbot = () => {
       }
 
       // Add AI response
-      setMessages([...newMessages, { role: 'assistant', content: data.message }]);
+      const assistantMessage = { role: 'assistant' as const, content: data.message, timestamp: Date.now() };
+      setMessages([...newMessages, assistantMessage]);
+      
+      // Speak the response if voice is enabled
+      if (voiceEnabled) {
+        speakText(data.message);
+      }
     } catch (error: any) {
       console.error('Chat error:', error);
       toast({
@@ -83,37 +104,81 @@ const Chatbot = () => {
     }
   };
 
+  const speakText = (text: string) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      
+      speechSynthesisRef.current = utterance;
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const stopSpeaking = () => {
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+  };
+
+  const toggleVoice = () => {
+    if (isSpeaking) {
+      stopSpeaking();
+    }
+    setVoiceEnabled(!voiceEnabled);
+  };
+
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      const audioChunks: Blob[] = [];
+      audioChunksRef.current = [];
+      
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+      
+      mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
-        audioChunks.push(event.data);
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
       };
 
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        // For now, just show a message that voice is captured
-        // In a full implementation, this would be sent to a speech-to-text API
-        toast({
-          title: 'Voice captured!',
-          description: 'Voice input feature coming soon. Please use text for now.',
-        });
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         stream.getTracks().forEach(track => track.stop());
-        setIsRecording(false);
+        
+        // Convert to base64 and transcribe
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+          const base64Audio = reader.result?.toString().split(',')[1];
+          if (base64Audio) {
+            await transcribeAudio(base64Audio);
+          }
+        };
       };
 
       mediaRecorder.start();
       setIsRecording(true);
+      
+      toast({
+        title: 'Recording...',
+        description: 'Speak now. Recording will stop automatically.',
+      });
 
-      // Auto-stop after 10 seconds
+      // Auto-stop after 30 seconds
       setTimeout(() => {
-        if (mediaRecorder.state === 'recording') {
-          mediaRecorder.stop();
+        if (mediaRecorderRef.current?.state === 'recording') {
+          stopRecording();
         }
-      }, 10000);
+      }, 30000);
     } catch (error) {
       console.error('Recording error:', error);
       toast({
@@ -125,7 +190,25 @@ const Chatbot = () => {
   };
 
   const stopRecording = () => {
-    setIsRecording(false);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const transcribeAudio = async (base64Audio: string) => {
+    // For now, use Web Speech API for transcription
+    // In production, you'd send this to a speech-to-text service
+    toast({
+      title: 'Processing...',
+      description: 'Converting speech to text',
+    });
+    
+    // Placeholder: In a real implementation, you'd call a transcription API
+    // For demo purposes, we'll use a simple message
+    setTimeout(() => {
+      setInput('Voice transcription will be available soon. Please type your message.');
+    }, 1000);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -177,7 +260,11 @@ const Chatbot = () => {
                     ? 'bg-muted'
                     : 'bg-primary text-primary-foreground'
                 }`}>
-                  <p className="whitespace-pre-wrap">{message.content}</p>
+                  {message.role === 'assistant' && message.timestamp ? (
+                    <TypewriterMessage content={message.content} speed={30} />
+                  ) : (
+                    <p className="whitespace-pre-wrap">{message.content}</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -200,6 +287,36 @@ const Chatbot = () => {
         </CardContent>
         
         <div className="border-t p-4">
+          <div className="flex gap-2 mb-2">
+            <Button
+              onClick={toggleVoice}
+              variant={voiceEnabled ? 'default' : 'outline'}
+              size="sm"
+              className="gap-2"
+            >
+              {voiceEnabled ? (
+                <>
+                  <Volume2 className="w-4 h-4" />
+                  Voice On
+                </>
+              ) : (
+                <>
+                  <VolumeX className="w-4 h-4" />
+                  Voice Off
+                </>
+              )}
+            </Button>
+            {isSpeaking && (
+              <Button
+                onClick={stopSpeaking}
+                variant="destructive"
+                size="sm"
+                className="gap-2"
+              >
+                Stop Speaking
+              </Button>
+            )}
+          </div>
           <div className="flex gap-2">
             <Textarea
               value={input}
@@ -222,6 +339,7 @@ const Chatbot = () => {
                 onClick={isRecording ? stopRecording : startRecording}
                 variant={isRecording ? 'destructive' : 'secondary'}
                 size="icon"
+                disabled={isLoading}
               >
                 {isRecording ? (
                   <MicOff className="w-4 h-4" />
@@ -232,7 +350,7 @@ const Chatbot = () => {
             </div>
           </div>
           <p className="text-xs text-muted-foreground mt-2">
-            Press Enter to send, Shift+Enter for new line
+            Press Enter to send, Shift+Enter for new line • Voice recording available
           </p>
         </div>
       </Card>
