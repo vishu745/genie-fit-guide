@@ -39,8 +39,8 @@ export const VoiceMode = () => {
       // Request microphone permission
       await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // For demo, using a public agent ID - replace with your ElevenLabs agent ID
-      const demoAgentId = 'your-agent-id-here'; // User needs to create this in ElevenLabs
+      // ElevenLabs Conversational AI Agent ID
+      const demoAgentId = 'agent_4001k6zexjtyf4dabww1x94xnhzf';
       
       // Get signed URL from our edge function
       const { data, error } = await supabase.functions.invoke('elevenlabs-signed-url', {
